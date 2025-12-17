@@ -18,7 +18,8 @@ export function LoginPage({ onLoggedIn }: Props) {
     setLoading(true);
     try {
       const result = await login(email, password);
-      saveAuth(result.token);
+      // backend returns { user, token }
+      saveAuth(result.token, result.user);
       onLoggedIn();
     } catch (err) {
       setError('Login failed');

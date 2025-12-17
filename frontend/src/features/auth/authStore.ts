@@ -1,21 +1,28 @@
 const STORAGE_KEY = 'auth';
 
-export type AuthState = {
-  token: string | null;
+export type AuthUser = {
+  id: string;
+  email: string;
+  name?: string | null;
 };
 
-export function saveAuth(token: string) {
-  const state: AuthState = { token };
+export type AuthState = {
+  token: string | null;
+  user: AuthUser | null;
+};
+
+export function saveAuth(token: string, user: AuthUser) {
+  const state: AuthState = { token, user };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 export function loadAuth(): AuthState {
   const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return { token: null };
+  if (!raw) return { token: null, user: null };
   try {
     return JSON.parse(raw) as AuthState;
   } catch {
-    return { token: null };
+    return { token: null, user: null };
   }
 }
 
