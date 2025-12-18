@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { LoginPage } from './features/auth/LoginPage';
+import { RegisterPage } from './features/auth/RegisterPage';
 import { loadAuth } from './features/auth/authStore';
 import { connectSocket, disconnectSocket } from './realtime/socket';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { ProfilePanel } from './features/auth/ProfilePanel';
 
 type AuthState = ReturnType<typeof loadAuth>;
 
@@ -22,6 +28,19 @@ type ViewFilter = 'ALL' | 'ASSIGNED_TO_ME' | 'CREATED_BY_ME' | 'OVERDUE';
 type StatusFilter = 'ALL' | Task['status'];
 type PriorityFilter = 'ALL' | Task['priority'];
 type DueDateSort = 'NONE' | 'ASC' | 'DESC';
+
+const taskFormSchema = z.object({
+  title: z
+    .string()
+    .min(1, 'Title is required')
+    .max(100, 'Title must be at most 100 characters'),
+  description: z.string().optional(),
+  priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']),
+  status: z.enum(['ToDo', 'InProgress', 'Review', 'Completed']),
+  dueDate: z.string().optional(),
+});
+
+type TaskFormValues = z.infer<typeof taskFormSchema>;
 
 function normalizeTask(rawWrapper: any): Task {
   const raw = rawWrapper?.task ?? rawWrapper;
@@ -51,24 +70,36 @@ function App() {
   const currentUserId = user?.id ?? null;
 
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const [newTitle, setNewTitle] = useState('');
-  const [newDescription, setNewDescription] = useState('');
-  const [newPriority, setNewPriority] = useState<
-    'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'
-  >('LOW');
-  const [newStatus, setNewStatus] = useState<
-    'ToDo' | 'InProgress' | 'Review' | 'Completed'
-  >('ToDo');
-  const [newDueDate, setNewDueDate] = useState('');
-  const [creating, setCreating] = useState(false);
 
   const [viewFilter, setViewFilter] = useState<ViewFilter>('ALL');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
-  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('ALL');
+  const [priorityFilter, setPriorityFilter] =
+    useState<PriorityFilter>('ALL');
   const [dueSort, setDueSort] = useState<DueDateSort>('NONE');
+  const [search, setSearch] = useState('');
+
+  const [creating, setCreating] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<TaskFormValues>({
+    resolver: zodResolver(taskFormSchema),
+    defaultValues: {
+      title: '',
+      description: '',
+      priority: 'LOW',
+      status: 'ToDo',
+      dueDate: '',
+    },
+  });
+
+  const queryClient = useQueryClient();
 
   function handleLoggedIn() {
     const updated = loadAuth();
@@ -80,11 +111,11 @@ function App() {
     setToken(null);
     setTasks([]);
     disconnectSocket();
+    queryClient.clear();
   }
 
-  async function handleCreateTask(e: React.FormEvent) {
-    e.preventDefault();
-    if (!newTitle.trim() || !token) return;
+  async function handleCreateTask(values: TaskFormValues) {
+    if (!token) return;
 
     try {
       setCreating(true);
@@ -96,13 +127,11 @@ function App() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          title: newTitle.trim(),
-          description: newDescription.trim() || null,
-          priority: newPriority,
-          status: newStatus,
-          // datetime-local gives "YYYY-MM-DDTHH:mm"
-          // backend can parse or treat as string
-          dueDate: newDueDate || null,
+          title: values.title.trim(),
+          description: values.description?.trim() || null,
+          priority: values.priority,
+          status: values.status,
+          dueDate: values.dueDate || null,
         }),
       });
 
@@ -110,14 +139,15 @@ function App() {
         throw new Error(`Failed to create task (${response.status})`);
       }
 
-      // Task will be added via Socket.IO task:created
       await response.json();
 
-      setNewTitle('');
-      setNewDescription('');
-      setNewPriority('LOW');
-      setNewStatus('ToDo');
-      setNewDueDate('');
+      reset({
+        title: '',
+        description: '',
+        priority: 'LOW',
+        status: 'ToDo',
+        dueDate: '',
+      });
     } catch (err: any) {
       setError(err.message ?? 'Failed to create task');
     } finally {
@@ -183,42 +213,44 @@ function App() {
     }
   }
 
-  // Load tasks when token changes
-  useEffect(() => {
-    if (!token) {
-      setTasks([]);
-      return;
-    }
+  const {
+    data: tasksData,
+    isLoading,
+    error: queryError,
+    refetch,
+  } = useQuery<Task[]>({
+    queryKey: ['tasks', token],
+    enabled: !!token,
+    queryFn: async () => {
+      const response = await fetch('http://localhost:3001/api/tasks', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
-    async function fetchTasks() {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const response = await fetch('http://localhost:3001/api/tasks', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to load tasks (${response.status})`);
-        }
-
-        const data = await response.json();
-        const list = normalizeList(data);
-        setTasks(list);
-      } catch (err: any) {
-        setError(err.message ?? 'Failed to load tasks');
-      } finally {
-        setLoading(false);
+      if (!response.ok) {
+        throw new Error(`Failed to load tasks (${response.status})`);
       }
+
+      const data = await response.json();
+      return normalizeList(data);
+    },
+  });
+
+  useEffect(() => {
+    if (tasksData) {
+      setTasks(tasksData);
+      setError(null);
     }
+  }, [tasksData]);
 
-    fetchTasks();
-  }, [token]);
+  useEffect(() => {
+    if (queryError) {
+      const err = queryError as Error;
+      setError(err.message ?? 'Failed to load tasks');
+    }
+  }, [queryError]);
 
-  // Real-time Socket.IO subscriptions
   useEffect(() => {
     if (!token) return;
 
@@ -252,13 +284,11 @@ function App() {
     };
   }, [token]);
 
-  // Derived filtered + sorted tasks
   const visibleTasks = useMemo(() => {
     let result = [...tasks];
 
     const now = new Date();
 
-    // View filter
     if (viewFilter === 'ASSIGNED_TO_ME' && currentUserId) {
       result = result.filter((t) => t.assignedToId === currentUserId);
     } else if (viewFilter === 'CREATED_BY_ME' && currentUserId) {
@@ -271,17 +301,25 @@ function App() {
       });
     }
 
-    // Status filter
     if (statusFilter !== 'ALL') {
       result = result.filter((t) => t.status === statusFilter);
     }
 
-    // Priority filter
     if (priorityFilter !== 'ALL') {
       result = result.filter((t) => t.priority === priorityFilter);
     }
 
-    // Due date sorting
+    if (search.trim()) {
+      const term = search.trim().toLowerCase();
+      result = result.filter((t) => {
+        const inTitle = t.title.toLowerCase().includes(term);
+        const inDesc = t.description
+          ? t.description.toLowerCase().includes(term)
+          : false;
+        return inTitle || inDesc;
+      });
+    }
+
     if (dueSort !== 'NONE') {
       result.sort((a, b) => {
         const aTime = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
@@ -292,224 +330,487 @@ function App() {
     }
 
     return result;
-  }, [tasks, viewFilter, statusFilter, priorityFilter, dueSort, currentUserId]);
+  }, [
+    tasks,
+    viewFilter,
+    statusFilter,
+    priorityFilter,
+    dueSort,
+    search,
+    currentUserId,
+  ]);
 
+  // Auth screens
   if (!token) {
-    return <LoginPage onLoggedIn={handleLoggedIn} />;
+    if (authMode === 'login') {
+      return (
+        <LoginPage
+          onLoggedIn={handleLoggedIn}
+          onSwitchToRegister={() => setAuthMode('register')}
+        />
+      );
+    }
+
+    return (
+      <RegisterPage
+        onRegistered={handleLoggedIn}
+        onSwitchToLogin={() => setAuthMode('login')}
+      />
+    );
   }
 
+  const shellCardClass =
+    'bg-white rounded-3xl shadow-sm border border-gray-100';
+
+  const widgetCardClass =
+    'bg-white rounded-3xl shadow-sm border border-gray-100 px-5 py-4 flex flex-col';
+
   return (
-    <div>
-      <header style={{ padding: 16, borderBottom: '1px solid #ddd' }}>
-        <span>Task Manager</span>
-        {user && (
-          <span style={{ marginLeft: 16 }}>Hi, {user.name ?? user.email}</span>
-        )}
-        <button style={{ marginLeft: 16 }} onClick={handleLogout}>
-          Logout
-        </button>
-      </header>
-      <main style={{ padding: 16 }}>
-        {/* Dashboard controls */}
-        <section style={{ marginBottom: 16 }}>
-          <div style={{ marginBottom: 8 }}>
-            <strong>View: </strong>
-            <button
-              onClick={() => setViewFilter('ALL')}
-              style={{ marginRight: 8 }}
-            >
-              All
-            </button>
-            <button
-              onClick={() => setViewFilter('ASSIGNED_TO_ME')}
-              style={{ marginRight: 8 }}
-              disabled={!currentUserId}
-            >
-              Assigned to me
-            </button>
-            <button
-              onClick={() => setViewFilter('CREATED_BY_ME')}
-              style={{ marginRight: 8 }}
-              disabled={!currentUserId}
-            >
-              Created by me
-            </button>
-            <button onClick={() => setViewFilter('OVERDUE')}>
-              Overdue
-            </button>
-          </div>
-
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ marginRight: 8 }}>
-              Status:
-              <select
-                value={statusFilter}
-                onChange={(e) =>
-                  setStatusFilter(e.target.value as StatusFilter)
-                }
-                style={{ marginLeft: 4 }}
-              >
-                <option value="ALL">All</option>
-                <option value="ToDo">To Do</option>
-                <option value="InProgress">In Progress</option>
-                <option value="Review">Review</option>
-                <option value="Completed">Completed</option>
-              </select>
-            </label>
-
-            <label style={{ marginRight: 8 }}>
-              Priority:
-              <select
-                value={priorityFilter}
-                onChange={(e) =>
-                  setPriorityFilter(e.target.value as PriorityFilter)
-                }
-                style={{ marginLeft: 4 }}
-              >
-                <option value="ALL">All</option>
-                <option value="LOW">Low</option>
-                <option value="MEDIUM">Medium</option>
-                <option value="HIGH">High</option>
-                <option value="URGENT">Urgent</option>
-              </select>
-            </label>
-
-            <label>
-              Sort by due date:
-              <select
-                value={dueSort}
-                onChange={(e) =>
-                  setDueSort(e.target.value as DueDateSort)
-                }
-                style={{ marginLeft: 4 }}
-              >
-                <option value="NONE">None</option>
-                <option value="ASC">Soonest first</option>
-                <option value="DESC">Latest first</option>
-              </select>
-            </label>
-          </div>
-        </section>
-
-        {/* Create task */}
-        <form
-          onSubmit={handleCreateTask}
-          style={{
-            marginBottom: 16,
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-          }}
+    <>
+      <div className="min-h-screen bg-gradient-to-br from-yellow-300 via-yellow-200 to-yellow-300 flex items-center justify-center px-4">
+        <div
+          className={`${shellCardClass} w-full max-w-6xl h-[700px] flex overflow-hidden`}
         >
-          <input
-            type="text"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            placeholder="New task title"
-            style={{ flex: '1 1 200px' }}
-          />
+          {/* Sidebar */}
+          <aside className="w-64 bg-white border-r border-yellow-100 flex flex-col justify-between py-6">
+            <div className="px-6 space-y-6">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-yellow-400 flex items-center justify-center font-semibold text-sm text-gray-900">
+                  {user?.name?.[0]?.toUpperCase() ?? 'U'}
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-semibold text-lg text-gray-900">
+                    Organizo
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    Task dashboard
+                  </span>
+                </div>
+              </div>
 
-          <input
-            type="text"
-            value={newDescription}
-            onChange={(e) => setNewDescription(e.target.value)}
-            placeholder="Description (optional)"
-            style={{ flex: '1 1 250px' }}
-          />
+              <nav className="space-y-2 text-sm">
+                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-xl bg-yellow-50 border-l-4 border-yellow-400 text-gray-900 font-medium">
+                  <span>Tasks</span>
+                </button>
+              </nav>
+            </div>
 
-          <select
-            value={newPriority}
-            onChange={(e) =>
-              setNewPriority(e.target.value as typeof newPriority)
-            }
-            style={{ flex: '0 0 120px' }}
-          >
-            <option value="LOW">Low</option>
-            <option value="MEDIUM">Medium</option>
-            <option value="HIGH">High</option>
-            <option value="URGENT">Urgent</option>
-          </select>
+            <div className="px-6 space-y-2 text-sm text-gray-500">
+              <button
+                onClick={() => setShowProfile(true)}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-gray-50"
+              >
+                <span>Profile</span>
+              </button>
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-gray-50"
+              >
+                <span>Log out</span>
+              </button>
+            </div>
+          </aside>
 
-          <select
-            value={newStatus}
-            onChange={(e) =>
-              setNewStatus(e.target.value as typeof newStatus)
-            }
-            style={{ flex: '0 0 140px' }}
-          >
-            <option value="ToDo">To Do</option>
-            <option value="InProgress">In Progress</option>
-            <option value="Review">Review</option>
-            <option value="Completed">Completed</option>
-          </select>
+          {/* Main dashboard */}
+          <main className="flex-1 flex flex-col px-8 py-6 space-y-5 bg-[#fdfdfd]">
+            {/* Header */}
+            <header className="flex items-center justify-between">
+              <div className="flex flex-col">
+                <span className="text-lg font-semibold text-gray-900">
+                  Tasks
+                </span>
+                {user && (
+                  <span className="text-xs text-gray-500">
+                    Hi, {user.name ?? user.email}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by title or description"
+                  className="w-80 h-10 rounded-full bg-gray-50 border border-gray-200 px-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                />
+              </div>
+            </header>
 
-          <input
-            type="datetime-local"
-            value={newDueDate}
-            onChange={(e) => setNewDueDate(e.target.value)}
-            style={{ flex: '0 0 220px' }}
-          />
+            {/* Filters and create task row */}
+            <section className={`${shellCardClass} px-5 py-4 space-y-4`}>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="mr-2 font-semibold text-gray-700">
+                  View:
+                </span>
+                <button
+                  onClick={() => setViewFilter('ALL')}
+                  className={`rounded-full px-3 py-1 font-medium ${
+                    viewFilter === 'ALL'
+                      ? 'bg-yellow-400 text-gray-900'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  All
+                </button>
+                <button
+                  onClick={() => setViewFilter('ASSIGNED_TO_ME')}
+                  disabled={!currentUserId}
+                  className={`rounded-full px-3 py-1 font-medium ${
+                    viewFilter === 'ASSIGNED_TO_ME'
+                      ? 'bg-yellow-400 text-gray-900'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  } ${
+                    !currentUserId ? 'cursor-not-allowed opacity-50' : ''
+                  }`}
+                >
+                  Assigned to me
+                </button>
+                <button
+                  onClick={() => setViewFilter('CREATED_BY_ME')}
+                  disabled={!currentUserId}
+                  className={`rounded-full px-3 py-1 font-medium ${
+                    viewFilter === 'CREATED_BY_ME'
+                      ? 'bg-yellow-400 text-gray-900'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  } ${
+                    !currentUserId ? 'cursor-not-allowed opacity-50' : ''
+                  }`}
+                >
+                  Created by me
+                </button>
+                <button
+                  onClick={() => setViewFilter('OVERDUE')}
+                  className={`rounded-full px-3 py-1 font-medium ${
+                    viewFilter === 'OVERDUE'
+                      ? 'bg-red-500 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  Overdue
+                </button>
+              </div>
 
-          <button
-            type="submit"
-            disabled={creating || !newTitle.trim()}
-            style={{ flex: '0 0 110px' }}
-          >
-            {creating ? 'Adding...' : 'Add task'}
-          </button>
-        </form>
+              <div className="flex flex-wrap items-center gap-4 text-xs text-gray-700">
+                <label className="flex items-center gap-2">
+                  <span>Status:</span>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) =>
+                      setStatusFilter(e.target.value as StatusFilter)
+                    }
+                    className="rounded-lg border border-gray-200 bg-white px-2 py-1 focus:border-yellow-400 focus:outline-none"
+                  >
+                    <option value="ALL">All</option>
+                    <option value="ToDo">To Do</option>
+                    <option value="InProgress">In Progress</option>
+                    <option value="Review">Review</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </label>
 
-        {/* List */}
-        {loading && <p>Loading tasks...</p>}
-        {error && <p style={{ color: 'red' }}>{error}</p>}
+                <label className="flex items-center gap-2">
+                  <span>Priority:</span>
+                  <select
+                    value={priorityFilter}
+                    onChange={(e) =>
+                      setPriorityFilter(
+                        e.target.value as PriorityFilter
+                      )
+                    }
+                    className="rounded-lg border border-gray-200 bg-white px-2 py-1 focus:border-yellow-400 focus:outline-none"
+                  >
+                    <option value="ALL">All</option>
+                    <option value="LOW">Low</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HIGH">High</option>
+                    <option value="URGENT">Urgent</option>
+                  </select>
+                </label>
 
-        {!loading && !error && (
-          <>
-            {visibleTasks.length === 0 ? (
-              <p>No tasks found.</p>
-            ) : (
-              <ul>
-                {visibleTasks.map((task) => (
-                  <li key={task.id} style={{ marginBottom: 8 }}>
-                    <div>
-                      <strong>{task.title}</strong>{' '}
-                      <span style={{ marginLeft: 8 }}>
-                        [{task.status}] [{task.priority}]
-                      </span>
-                    </div>
-                    {task.description && (
-                      <div>{task.description}</div>
-                    )}
-                    {task.dueDate && (
-                      <div>
-                        Due:{' '}
-                        {new Date(task.dueDate).toLocaleString()}
-                      </div>
-                    )}
-                    <div>
-                      <button
-                        onClick={() => handleToggleTask(task)}
-                        style={{ marginRight: 8 }}
+                <label className="flex items-center gap-2">
+                  <span>Sort by due date:</span>
+                  <select
+                    value={dueSort}
+                    onChange={(e) =>
+                      setDueSort(e.target.value as DueDateSort)
+                    }
+                    className="rounded-lg border border-gray-200 bg-white px-2 py-1 focus:border-yellow-400 focus:outline-none"
+                  >
+                    <option value="NONE">None</option>
+                    <option value="ASC">Soonest first</option>
+                    <option value="DESC">Latest first</option>
+                  </select>
+                </label>
+              </div>
+
+              <form
+                onSubmit={handleSubmit(handleCreateTask)}
+                className="flex flex-wrap items-start gap-3 pt-2 border-t border-gray-100 mt-2"
+              >
+                <div className="min-w-[180px] flex-1">
+                  <input
+                    type="text"
+                    placeholder="New task title"
+                    {...register('title')}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs placeholder:text-gray-400 focus:border-yellow-400 focus:outline-none"
+                  />
+                  {errors.title && (
+                    <p className="mt-1 text-[11px] text-red-500">
+                      {errors.title.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="min-w-[220px] flex-1">
+                  <input
+                    type="text"
+                    placeholder="Description (optional)"
+                    {...register('description')}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs placeholder:text-gray-400 focus:border-yellow-400 focus:outline-none"
+                  />
+                  {errors.description && (
+                    <p className="mt-1 text-[11px] text-red-500">
+                      {errors.description.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="w-28">
+                  <select
+                    {...register('priority')}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-2 py-2 text-xs focus:border-yellow-400 focus:outline-none"
+                  >
+                    <option value="LOW">Low</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HIGH">High</option>
+                    <option value="URGENT">Urgent</option>
+                  </select>
+                  {errors.priority && (
+                    <p className="mt-1 text-[11px] text-red-500">
+                      {errors.priority.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="w-32">
+                  <select
+                    {...register('status')}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-2 py-2 text-xs focus:border-yellow-400 focus:outline-none"
+                  >
+                    <option value="ToDo">To Do</option>
+                    <option value="InProgress">In Progress</option>
+                    <option value="Review">Review</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                  {errors.status && (
+                    <p className="mt-1 text-[11px] text-red-500">
+                      {errors.status.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="w-56">
+                  <input
+                    type="datetime-local"
+                    {...register('dueDate')}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-2 py-2 text-xs focus:border-yellow-400 focus:outline-none"
+                  />
+                  {errors.dueDate && (
+                    <p className="mt-1 text-[11px] text-red-500">
+                      {errors.dueDate.message}
+                    </p>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={creating}
+                  className="rounded-full bg-yellow-400 px-5 py-2 text-xs font-semibold text-gray-900 shadow-sm hover:bg-yellow-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {creating ? 'Adding...' : 'Add task'}
+                </button>
+              </form>
+            </section>
+
+            {/* Main content */}
+            <section className="flex-1 grid grid-cols-3 gap-4">
+              {/* Tasks list */}
+              <div className={`${widgetCardClass} col-span-2`}>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="font-semibold text-sm text-gray-900">
+                    My tasks ({visibleTasks.length})
+                  </h2>
+                  {isLoading && (
+                    <span className="text-xs text-gray-400">
+                      Loading...
+                    </span>
+                  )}
+                </div>
+
+                {queryError && (
+                  <div className="mb-2 flex items-center justify-between rounded-xl bg-red-50 px-3 py-2">
+                    <p className="text-xs text-red-600">
+                      Failed to load tasks. Please try again.
+                    </p>
+                    <button
+                      onClick={() => refetch()}
+                      className="text-[11px] font-semibold text-red-700 underline"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {isLoading && !tasksData && (
+                  <ul className="space-y-2">
+                    {[1, 2, 3].map((i) => (
+                      <li
+                        key={i}
+                        className="rounded-2xl border border-gray-100 bg-gray-50 px-3 py-2 animate-pulse"
                       >
-                        {task.status === 'Completed'
-                          ? 'Mark not completed'
-                          : 'Mark completed'}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteTask(task.id)}
-                        style={{ color: 'red' }}
+                        <div className="h-3 w-32 rounded bg-gray-200 mb-2" />
+                        <div className="h-2 w-48 rounded bg-gray-200" />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {error && !queryError && (
+                  <p className="text-xs text-red-500 mb-2">{error}</p>
+                )}
+
+                {!isLoading && !queryError && visibleTasks.length === 0 && (
+                  <p className="text-xs text-gray-400">No tasks found.</p>
+                )}
+
+                {!isLoading && !queryError && visibleTasks.length > 0 && (
+                  <ul className="space-y-2 overflow-y-auto pr-1">
+                    {visibleTasks.map((task) => (
+                      <li
+                        key={task.id}
+                        className="rounded-2xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs flex flex-col gap-1"
                       >
-                        Delete
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
-      </main>
-    </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleToggleTask(task)}
+                              className={`h-4 w-4 rounded-full border flex items-center justify-center ${
+                                task.status === 'Completed'
+                                  ? 'border-yellow-400 bg-yellow-400'
+                                  : 'border-gray-300 bg-white'
+                              }`}
+                            >
+                              {task.status === 'Completed' && (
+                                <span className="h-2 w-2 rounded-full bg-white" />
+                              )}
+                            </button>
+                            <span
+                              className={`font-medium text-gray-900 ${
+                                task.status === 'Completed'
+                                  ? 'line-through text-gray-400'
+                                  : ''
+                              }`}
+                            >
+                              {task.title}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600 border border-gray-200">
+                              {task.status}
+                            </span>
+                            <span className="inline-flex items-center gap-1 rounded-full bg-yellow-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-yellow-800 border border-yellow-100">
+                              {task.priority}
+                            </span>
+                          </div>
+                        </div>
+
+                        {task.description && (
+                          <p className="text-[11px] text-gray-500">
+                            {task.description}
+                          </p>
+                        )}
+
+                        {task.dueDate && (
+                          <p className="text-[11px] text-gray-400">
+                            Due:{' '}
+                            {new Date(task.dueDate).toLocaleString()}
+                          </p>
+                        )}
+
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <button
+                            onClick={() => handleToggleTask(task)}
+                            className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-gray-700 border border-gray-200 hover:bg-gray-100"
+                          >
+                            {task.status === 'Completed'
+                              ? 'Mark not completed'
+                              : 'Mark completed'}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTask(task.id)}
+                            className="rounded-full bg-red-500 px-3 py-1 text-[11px] font-medium text-white hover:bg-red-600"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Overview */}
+              <div className={widgetCardClass}>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="font-semibold text-sm text-gray-900">
+                    Overview
+                  </h2>
+                </div>
+                <div className="space-y-2 text-[11px] text-gray-600">
+                  <p>
+                    Total tasks:{' '}
+                    <span className="font-semibold text-gray-900">
+                      {tasks.length}
+                    </span>
+                  </p>
+                  <p>
+                    Completed:{' '}
+                    <span className="font-semibold text-green-600">
+                      {
+                        tasks.filter(
+                          (t) => t.status === 'Completed'
+                        ).length
+                      }
+                    </span>
+                  </p>
+                  <p>
+                    Overdue:{' '}
+                    <span className="font-semibold text-red-500">
+                      {
+                        tasks.filter((t) => {
+                          if (!t.dueDate) return false;
+                          const due = new Date(t.dueDate);
+                          return (
+                            due < new Date() && t.status !== 'Completed'
+                          );
+                        }).length
+                      }
+                    </span>
+                  </p>
+                </div>
+              </div>
+            </section>
+          </main>
+        </div>
+      </div>
+
+      {showProfile && token && (
+        <ProfilePanel
+          token={token}
+          onClose={() => setShowProfile(false)}
+        />
+      )}
+    </>
   );
 }
 

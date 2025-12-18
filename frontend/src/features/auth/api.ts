@@ -11,10 +11,21 @@ export type AuthResponse = {
   user: User;
 };
 
-export async function login(email: string, password: string): Promise<AuthResponse> {
+export async function login(
+  email: string,
+  password: string
+): Promise<AuthResponse> {
   return api.post<AuthResponse>('/api/auth/login', { email, password });
 }
 
-export async function register(name: string, email: string, password: string): Promise<void> {
-  await api.post('/api/auth/register', { name, email, password });
+export async function register(
+  email: string,
+  password: string,
+  name: string
+): Promise<AuthResponse> {
+  return api.post<AuthResponse>('/api/auth/register', {
+    email,
+    password,
+    name,
+  });
 }
