@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3001;
 
 const allowedOrigins = [
   'http://localhost:5173',
-  'https://organizo-mdnv2b715-saransh-gargs-projects.vercel.app',
+   'https://organizo-l6uakcecrd-saransh-gargs-projects.vercel.app',
 ];
 
 app.use(
