@@ -10,14 +10,25 @@ import { errorHandler } from './middleware/errorHandler';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const allowedOrigins = [
+// CORS config for local + Vercel
+const allowedOrigins = new Set<string>([
   'http://localhost:5173',
-   'https://organizo-l6uakcecrd-saransh-gargs-projects.vercel.app',
-];
+  'https://organizo-1om2r859y-saransh-gargs-projects.vercel.app',
+]);
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin(origin, callback) {
+      if (!origin) {
+        // allow tools like curl/Postman and health checks
+        return callback(null, true);
+      }
+      if (allowedOrigins.has(origin)) {
+        return callback(null, true);
+      }
+      console.error('Blocked by CORS:', origin);
+      return callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
   })
 );
