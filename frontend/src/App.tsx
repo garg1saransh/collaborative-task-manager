@@ -24,6 +24,19 @@ type Task = {
   updatedAt: string;
 };
 
+type AppUser = {
+  id: string;
+  name: string | null;
+  email: string;
+};
+
+type Notification = {
+  id: string;
+  taskId: string;
+  title: string;
+  createdAt: string;
+};
+
 type ViewFilter = 'ALL' | 'ASSIGNED_TO_ME' | 'CREATED_BY_ME' | 'OVERDUE';
 type StatusFilter = 'ALL' | Task['status'];
 type PriorityFilter = 'ALL' | Task['priority'];
@@ -38,6 +51,7 @@ const taskFormSchema = z.object({
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']),
   status: z.enum(['ToDo', 'InProgress', 'Review', 'Completed']),
   dueDate: z.string().optional(),
+  assignedToId: z.string().optional(),
 });
 
 type TaskFormValues = z.infer<typeof taskFormSchema>;
@@ -82,6 +96,8 @@ function App() {
   const [creating, setCreating] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
 
   const {
     register,
@@ -96,6 +112,7 @@ function App() {
       priority: 'LOW',
       status: 'ToDo',
       dueDate: '',
+      assignedToId: undefined,
     },
   });
 
@@ -132,6 +149,7 @@ function App() {
           priority: values.priority,
           status: values.status,
           dueDate: values.dueDate || null,
+          assignedToId: values.assignedToId || null,
         }),
       });
 
@@ -147,11 +165,51 @@ function App() {
         priority: 'LOW',
         status: 'ToDo',
         dueDate: '',
+        assignedToId: undefined,
       });
     } catch (err: any) {
       setError(err.message ?? 'Failed to create task');
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function handleEditTask(id: string, values: TaskFormValues) {
+    if (!token) return;
+
+    try {
+      const response = await fetch(
+        `http://localhost:3001/api/tasks/${id}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            title: values.title.trim(),
+            description: values.description?.trim() || null,
+            priority: values.priority,
+            status: values.status,
+            dueDate: values.dueDate || null,
+            assignedToId: values.assignedToId || null,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to update task (${response.status})`);
+      }
+
+      const updated = await response.json();
+      const normalized = normalizeTask(updated);
+
+      setTasks((prev) =>
+        prev.map((t) => (t.id === id ? normalized : t))
+      );
+      setEditingTaskId(null);
+    } catch (err: any) {
+      setError(err.message ?? 'Failed to update task');
     }
   }
 
@@ -237,6 +295,21 @@ function App() {
     },
   });
 
+  const { data: usersData } = useQuery<{ users: AppUser[] }>({
+    queryKey: ['users', token],
+    enabled: !!token,
+    queryFn: async () => {
+      const res = await fetch('http://localhost:3001/api/users', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        throw new Error('Failed to load users');
+      }
+      return res.json();
+    },
+  });
+  const users = usersData?.users ?? [];
+
   useEffect(() => {
     if (tasksData) {
       setTasks(tasksData);
@@ -277,12 +350,30 @@ function App() {
       setTasks((prev) => prev.filter((t) => t.id !== id));
     });
 
+    socket.on('task:assigned', (payload: any) => {
+      if (
+        payload.assignedToId &&
+        payload.assignedToId === currentUserId
+      ) {
+        setNotifications((prev) => [
+          {
+            id: `${payload.id}-${Date.now()}`,
+            taskId: payload.id,
+            title: payload.title,
+            createdAt: new Date().toISOString(),
+          },
+          ...prev,
+        ]);
+      }
+    });
+
     return () => {
       socket.off('task:created');
       socket.off('task:updated');
       socket.off('task:deleted');
+      socket.off('task:assigned');
     };
-  }, [token]);
+  }, [token, currentUserId]);
 
   const visibleTasks = useMemo(() => {
     let result = [...tasks];
@@ -353,7 +444,7 @@ function App() {
 
     return (
       <RegisterPage
-        onRegistered={handleLoggedIn}
+        onRegistered={() => setAuthMode('login')}
         onSwitchToLogin={() => setAuthMode('login')}
       />
     );
@@ -414,7 +505,7 @@ function App() {
           {/* Main dashboard */}
           <main className="flex-1 flex flex-col px-8 py-6 space-y-5 bg-[#fdfdfd]">
             {/* Header */}
-            <header className="flex items-center justify-between">
+            <header className="flex items-center justify_between">
               <div className="flex flex-col">
                 <span className="text-lg font-semibold text-gray-900">
                   Tasks
@@ -608,6 +699,20 @@ function App() {
                   )}
                 </div>
 
+                <div className="w-40">
+                  <select
+                    {...register('assignedToId')}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-2 py-2 text-xs focus:border-yellow-400 focus:outline-none"
+                  >
+                    <option value="">Unassigned</option>
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name || u.email}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="w-56">
                   <input
                     type="datetime-local"
@@ -737,6 +842,19 @@ function App() {
                           </p>
                         )}
 
+                        <p className="text-[11px] text-gray-400">
+                          Assigned to:{' '}
+                          <span className="font-medium text-gray-700">
+                            {users.find(
+                              (u) => u.id === task.assignedToId
+                            )?.name ||
+                              users.find(
+                                (u) => u.id === task.assignedToId
+                              )?.email ||
+                              'Unassigned'}
+                          </span>
+                        </p>
+
                         <div className="flex flex-wrap gap-2 pt-1">
                           <button
                             onClick={() => handleToggleTask(task)}
@@ -746,6 +864,29 @@ function App() {
                               ? 'Mark not completed'
                               : 'Mark completed'}
                           </button>
+
+                          <button
+                            onClick={() => {
+                              setEditingTaskId(task.id);
+                              reset({
+                                title: task.title,
+                                description: task.description ?? '',
+                                priority: task.priority,
+                                status: task.status,
+                                dueDate: task.dueDate
+                                  ? new Date(task.dueDate)
+                                      .toISOString()
+                                      .slice(0, 16)
+                                  : '',
+                                assignedToId:
+                                  task.assignedToId ?? undefined,
+                              });
+                            }}
+                            className="rounded-full bg_white px-3 py-1 text-[11px] font-medium text-gray-700 border border-gray-200 hover:bg-gray-100"
+                          >
+                            Edit
+                          </button>
+
                           <button
                             onClick={() => handleDeleteTask(task.id)}
                             className="rounded-full bg-red-500 px-3 py-1 text-[11px] font-medium text-white hover:bg-red-600"
@@ -753,6 +894,75 @@ function App() {
                             Delete
                           </button>
                         </div>
+
+                        {editingTaskId === task.id && (
+                          <form
+                            onSubmit={handleSubmit((values) =>
+                              handleEditTask(task.id, values)
+                            )}
+                            className="mt-2 flex flex-wrap items-start gap-2 border-t border-gray-200 pt-2"
+                          >
+                            <input
+                              type="text"
+                              placeholder="Title"
+                              {...register('title')}
+                              className="flex-1 min-w-[140px] rounded-xl border border-gray-200 bg-white px-2 py-1 text-[11px] placeholder:text-gray-400 focus:border-yellow-400 focus:outline-none"
+                            />
+                            <input
+                              type="text"
+                              placeholder="Description"
+                              {...register('description')}
+                              className="flex-[2] min-w-[180px] rounded-xl border border-gray-200 bg-white px-2 py-1 text-[11px] placeholder:text-gray-400 focus:border-yellow-400 focus:outline-none"
+                            />
+                            <select
+                              {...register('priority')}
+                              className="w-24 rounded-xl border border-gray-200 bg-white px-2 py-1 text-[11px] focus:border-yellow-400 focus:outline-none"
+                            >
+                              <option value="LOW">Low</option>
+                              <option value="MEDIUM">Medium</option>
+                              <option value="HIGH">High</option>
+                              <option value="URGENT">Urgent</option>
+                            </select>
+                            <select
+                              {...register('status')}
+                              className="w-28 rounded-xl border border-gray-200 bg-white px-2 py-1 text-[11px] focus:border-yellow-400 focus:outline-none"
+                            >
+                              <option value="ToDo">To Do</option>
+                              <option value="InProgress">In Progress</option>
+                              <option value="Review">Review</option>
+                              <option value="Completed">Completed</option>
+                            </select>
+                            <select
+                              {...register('assignedToId')}
+                              className="w-36 rounded-xl border border-gray-200 bg-white px-2 py-1 text-[11px] focus:border-yellow-400 focus:outline-none"
+                            >
+                              <option value="">Unassigned</option>
+                              {users.map((u) => (
+                                <option key={u.id} value={u.id}>
+                                  {u.name || u.email}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              type="datetime-local"
+                              {...register('dueDate')}
+                              className="w-44 rounded-xl border border-gray-200 bg-white px-2 py-1 text-[11px] focus:border-yellow-400 focus:outline-none"
+                            />
+                            <button
+                              type="submit"
+                              className="rounded-full bg-yellow-400 px-3 py-1 text-[11px] font-semibold text-gray-900 shadow-sm hover:bg-yellow-500"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingTaskId(null)}
+                              className="rounded-full bg-gray-100 px-3 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-200"
+                            >
+                              Cancel
+                            </button>
+                          </form>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -803,6 +1013,40 @@ function App() {
           </main>
         </div>
       </div>
+
+      {notifications.length > 0 && (
+        <div className="fixed top-4 right-4 z-40 w-72 space-y-2">
+          {notifications.slice(0, 5).map((n) => (
+            <div
+              key={n.id}
+              className="rounded-2xl bg-white shadow-lg border border-yellow-200 px-4 py-3 text-xs text-gray-800"
+            >
+              <div className="flex justify-between items-center mb-1">
+                <span className="font-semibold text-gray-900">
+                  New assignment
+                </span>
+                <button
+                  onClick={() =>
+                    setNotifications((prev) =>
+                      prev.filter((x) => x.id !== n.id)
+                    )
+                  }
+                  className="text-[10px] text-gray-400 hover:text-gray-600"
+                >
+                  ×
+                </button>
+              </div>
+              <p className="text-gray-700">
+                Task:{' '}
+                <span className="font-medium">{n.title}</span>
+              </p>
+              <p className="text-[10px] text-gray-400 mt-1">
+                {new Date(n.createdAt).toLocaleString()}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {showProfile && token && (
         <ProfilePanel

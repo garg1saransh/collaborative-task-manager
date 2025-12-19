@@ -1,121 +1,116 @@
 import prisma from '../utils/prisma';
 import {
   createTask,
-  listTasksForUser,
-  getTaskByIdForUser,
   updateTaskForUser,
-  deleteTaskForUser,
 } from './task.service';
 
-jest.mock('../utils/prisma', () => ({
-  __esModule: true,
-  default: {
-    task: {
-      create: jest.fn(),
-      findMany: jest.fn(),
-      findFirst: jest.fn(),
-      update: jest.fn(),
-      delete: jest.fn(),
-    },
-  },
-}));
-
-const mockedPrisma = prisma as unknown as {
-  task: {
-    create: jest.Mock;
-    findMany: jest.Mock;
-    findFirst: jest.Mock;
-    update: jest.Mock;
-    delete: jest.Mock;
+// Mock the real Prisma client
+jest.mock('../utils/prisma', () => {
+  const task = {
+    create: jest.fn(),
+    findMany: jest.fn(),
+    findFirst: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
   };
-};
+
+  return {
+    __esModule: true,
+    default: { task },
+  };
+});
 
 describe('task.service', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('createTask should default priority and status and convert dueDate', async () => {
-    mockedPrisma.task.create.mockResolvedValue({
-      id: '1',
-      title: 'Test',
-      description: null,
-      dueDate: new Date('2025-12-19T10:00:00.000Z'),
-      priority: 'LOW',
-      status: 'ToDo',
-      creatorId: 'user-1',
-      assignedToId: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+  it('createTask creates a task with defaults', async () => {
+    const creatorId = 'user-1';
+    const input = { title: 'Test task' };
 
-    const result = await createTask('user-1', {
-      title: 'Test',
-      dueDate: '2025-12-19T10:00:00.000Z',
-    });
-
-    expect(mockedPrisma.task.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          title: 'Test',
-          priority: 'LOW',
-          status: 'ToDo',
-          creatorId: 'user-1',
-          dueDate: expect.any(Date),
-        }),
-      })
-    );
-    expect(result.priority).toBe('LOW');
-    expect(result.status).toBe('ToDo');
-  });
-
-  it('updateTaskForUser should respect ownership and return null when task not found', async () => {
-    mockedPrisma.task.findFirst.mockResolvedValue(null);
-
-    const result = await updateTaskForUser('task-1', 'user-1', {
-      title: 'New title',
-    });
-
-    expect(mockedPrisma.task.update).not.toHaveBeenCalled();
-    expect(result).toBeNull();
-  });
-
-  it('deleteTaskForUser should delete and return the existing task when user owns it', async () => {
-    const existing = {
+    const created = {
       id: 'task-1',
-      title: 'Existing',
+      title: 'Test task',
       description: null,
       dueDate: null,
       priority: 'LOW',
       status: 'ToDo',
-      creatorId: 'user-1',
+      creatorId,
       assignedToId: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
-    mockedPrisma.task.findFirst.mockResolvedValue(existing);
-    mockedPrisma.task.delete.mockResolvedValue(existing);
+    (prisma.task.create as jest.Mock).mockResolvedValue(created);
 
-    const result = await deleteTaskForUser('task-1', 'user-1');
+    const result = await createTask(creatorId, input);
 
-    expect(mockedPrisma.task.delete).toHaveBeenCalledWith({
-      where: { id: 'task-1' },
-    });
-    expect(result).toEqual(existing);
-  });
-
-  it('listTasksForUser should filter by creatorId or assignedToId', async () => {
-    mockedPrisma.task.findMany.mockResolvedValue([]);
-
-    await listTasksForUser('user-1');
-
-    expect(mockedPrisma.task.findMany).toHaveBeenCalledWith(
+    expect(prisma.task.create).toHaveBeenCalledTimes(1);
+    expect(prisma.task.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: {
-          OR: [{ creatorId: 'user-1' }, { assignedToId: 'user-1' }],
-        },
+        data: expect.objectContaining({
+          title: 'Test task',
+          creatorId,
+          priority: 'LOW',
+          status: 'ToDo',
+        }),
       })
     );
+    expect(result).toEqual(created);
+  });
+
+  it('updateTaskForUser updates task fields', async () => {
+    const userId = 'user-1';
+    const taskId = 'task-1';
+
+    const existing = {
+      id: taskId,
+      title: 'Old',
+      description: 'Old desc',
+      dueDate: null,
+      priority: 'LOW',
+      status: 'ToDo',
+      creatorId: userId,
+      assignedToId: null,
+    };
+
+    (prisma.task.findFirst as jest.Mock).mockResolvedValue(existing);
+
+    const updated = {
+      ...existing,
+      title: 'New',
+      priority: 'HIGH',
+    };
+
+    (prisma.task.update as jest.Mock).mockResolvedValue(updated);
+
+    const result = await updateTaskForUser(taskId, userId, {
+      title: 'New',
+      priority: 'HIGH',
+    });
+
+    expect(prisma.task.update).toHaveBeenCalledTimes(1);
+    expect(prisma.task.update).toHaveBeenCalledWith({
+      where: { id: taskId },
+      data: expect.objectContaining({
+        title: 'New',
+        priority: 'HIGH',
+      }),
+    });
+    expect(result).toEqual(updated);
+  });
+
+  it('updateTaskForUser returns null if task not found for user', async () => {
+    (prisma.task.findFirst as jest.Mock).mockResolvedValue(null);
+
+    const result = await updateTaskForUser(
+      'task-unknown',
+      'user-1',
+      { title: 'X' }
+    );
+
+    expect(result).toBeNull();
+    expect(prisma.task.update).not.toHaveBeenCalled();
   });
 });

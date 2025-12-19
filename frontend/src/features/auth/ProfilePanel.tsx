@@ -16,6 +16,7 @@ export function ProfilePanel({ token, onClose }: Props) {
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<{ user: User }>({
     queryKey: ['me', token],
@@ -49,10 +50,28 @@ export function ProfilePanel({ token, onClose }: Props) {
       return res.json() as Promise<{ user: User }>;
     },
     onSuccess: (res) => {
-      // invalidate / refresh any queries that depend on user info
       queryClient.setQueryData(['me', token], res);
-      // also clear any auth cache you keep in localStorage via your auth store
       setLocalError(null);
+
+      // sync updated name into localStorage auth
+      const raw = localStorage.getItem('auth');
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          const next = {
+            ...parsed,
+            user: {
+              ...parsed.user,
+              name: res.user.name,
+            },
+          };
+          localStorage.setItem('auth', JSON.stringify(next));
+        } catch {
+          // ignore parse errors
+        }
+      }
+
+      setSuccess('Profile updated successfully');
     },
     onError: (err: any) => {
       setLocalError(err.message ?? 'Failed to update profile');
@@ -84,6 +103,7 @@ export function ProfilePanel({ token, onClose }: Props) {
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              setSuccess(null);
               updateMutation.mutate(name.trim());
             }}
             className="space-y-4 text-sm"
@@ -115,6 +135,10 @@ export function ProfilePanel({ token, onClose }: Props) {
 
             {localError && (
               <p className="text-[11px] text-red-500">{localError}</p>
+            )}
+
+            {success && (
+              <p className="text-[11px] text-green-600">{success}</p>
             )}
 
             <button

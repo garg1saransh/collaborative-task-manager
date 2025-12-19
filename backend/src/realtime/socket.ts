@@ -10,10 +10,11 @@ export function initSocket(server: HttpServer) {
   io = new Server(server, {
     cors: {
       origin: '*', // later restrict to frontend URL
-      methods: ['GET', 'POST'],
+      methods: ['GET', 'POST', 'PUT', 'DELETE'],
     },
   });
 
+  // Authenticate socket connections with JWT
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token as string | undefined;
     if (!token) return next(new Error('No token'));
@@ -41,7 +42,7 @@ export function initSocket(server: HttpServer) {
   });
 }
 
-export function getIO() {
+export function getIO(): Server {
   if (!io) {
     throw new Error('Socket.io not initialized');
   }
