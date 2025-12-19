@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query';
 
 type User = {
   id: string;
@@ -7,10 +8,14 @@ type User = {
   name: string | null;
 };
 
+type MeResponse = { user: User };
+
 type Props = {
   token: string;
   onClose: () => void;
 };
+
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
 
 export function ProfilePanel({ token, onClose }: Props) {
   const queryClient = useQueryClient();
@@ -18,10 +23,13 @@ export function ProfilePanel({ token, onClose }: Props) {
   const [localError, setLocalError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery<{ user: User }>({
+  const {
+    data,
+    isLoading,
+  }: UseQueryResult<MeResponse, Error> = useQuery<MeResponse, Error>({
     queryKey: ['me', token],
     queryFn: async () => {
-      const res = await fetch('http://localhost:3001/api/auth/me', {
+      const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
@@ -29,14 +37,15 @@ export function ProfilePanel({ token, onClose }: Props) {
       }
       return res.json();
     },
-    onSuccess: (data) => {
-      setName(data.user.name ?? '');
-    },
   });
 
-  const updateMutation = useMutation({
+  const updateMutation: UseMutationResult<MeResponse, any, string, unknown> = useMutation<
+    MeResponse,
+    any,
+    string
+  >({
     mutationFn: async (newName: string) => {
-      const res = await fetch('http://localhost:3001/api/auth/me', {
+      const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -47,13 +56,12 @@ export function ProfilePanel({ token, onClose }: Props) {
       if (!res.ok) {
         throw new Error('Failed to update profile');
       }
-      return res.json() as Promise<{ user: User }>;
+      return res.json() as Promise<MeResponse>;
     },
     onSuccess: (res) => {
       queryClient.setQueryData(['me', token], res);
       setLocalError(null);
 
-      // sync updated name into localStorage auth
       const raw = localStorage.getItem('auth');
       if (raw) {
         try {
@@ -84,9 +92,7 @@ export function ProfilePanel({ token, onClose }: Props) {
     <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/30">
       <div className="h-full w-full max-w-sm bg-white shadow-xl border-l border-gray-100 px-6 py-6 flex flex-col">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-gray-900">
-            Profile
-          </h2>
+          <h2 className="text-sm font-semibold text-gray-900">Profile</h2>
           <button
             onClick={onClose}
             className="text-xs text-gray-500 hover:text-gray-700"
@@ -143,10 +149,10 @@ export function ProfilePanel({ token, onClose }: Props) {
 
             <button
               type="submit"
-              disabled={updateMutation.isLoading}
+              disabled={updateMutation.isPending}
               className="w-full rounded-full bg-yellow-400 px-4 py-2 text-xs font-semibold text-gray-900 shadow-sm hover:bg-yellow-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {updateMutation.isLoading ? 'Saving…' : 'Save changes'}
+              {updateMutation.isPending ? 'Saving…' : 'Save changes'}
             </button>
           </form>
         )}
