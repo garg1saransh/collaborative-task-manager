@@ -139,13 +139,13 @@ function App() {
       setCreating(true);
 
       await api.post('/api/tasks', {
-  title: values.title.trim(),
-  description: values.description?.trim() || null,
-  priority: values.priority,
-  status: values.status,
-  dueDate: values.dueDate || null,
-  assignedToId: values.assignedToId || null,
-});
+        title: values.title.trim(),
+        description: values.description?.trim() || null,
+        priority: values.priority,
+        status: values.status,
+        dueDate: values.dueDate || null,
+        assignedToId: values.assignedToId || null,
+      });
 
       reset({
         title: '',
@@ -167,13 +167,13 @@ function App() {
 
     try {
       const updated = await api.put<any>(`/api/tasks/${id}`, {
-  title: values.title.trim(),
-  description: values.description?.trim() || null,
-  priority: values.priority,
-  status: values.status,
-  dueDate: values.dueDate || null,
-  assignedToId: values.assignedToId || null,
-});
+        title: values.title.trim(),
+        description: values.description?.trim() || null,
+        priority: values.priority,
+        status: values.status,
+        dueDate: values.dueDate || null,
+        assignedToId: values.assignedToId || null,
+      });
       const normalized = normalizeTask(updated);
 
       setTasks((prev) =>
@@ -193,8 +193,8 @@ function App() {
 
     try {
       const updated = await api.put<any>(`/api/tasks/${task.id}`, {
-  status: updatedStatus,
-});
+        status: updatedStatus,
+      });
       const normalized = normalizeTask(updated);
 
       setTasks((prev) =>
@@ -210,8 +210,7 @@ function App() {
 
     try {
       await api.delete(`/api/tasks/${taskId}`);
-
-setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
     } catch (err: any) {
       setError(err.message ?? 'Failed to delete task');
     }
@@ -227,7 +226,7 @@ setTasks((prev) => prev.filter((t) => t.id !== taskId));
     enabled: !!token,
     queryFn: async () => {
       const data = await api.get<any>('/api/tasks');
-return normalizeList(data);
+      return normalizeList(data);
     },
   });
 
@@ -236,7 +235,7 @@ return normalizeList(data);
     enabled: !!token,
     queryFn: async () => {
       const res = await api.get<{ users: AppUser[] }>('/api/users');
-return res;
+      return res;
     },
   });
   const users = usersData?.users ?? [];
@@ -389,13 +388,13 @@ return res;
 
   return (
     <>
-      <div className="min-h-screen bg-gradient-to-br from-yellow-300 via-yellow-200 to-yellow-300 flex items-center justify-center px-4">
+      <div className="min-h-screen bg-gradient-to-br from-yellow-300 via-yellow-200 to-yellow-300 flex items-center justify-center px-2 md:px-4">
         <div
-          className={`${shellCardClass} w-full max-w-6xl h-[700px] flex overflow-hidden`}
+          className={`${shellCardClass} w-full max-w-6xl md:h-[700px] flex flex-col md:flex-row overflow-hidden`}
         >
           {/* Sidebar */}
-          <aside className="w-64 bg-white border-r border-yellow-100 flex flex-col justify-between py-6">
-            <div className="px-6 space-y-6">
+          <aside className="w-full md:w-64 bg-white border-b md:border-b-0 md:border-r border-yellow-100 flex flex-col justify-between py-4 md:py-6">
+            <div className="px-4 md:px-6 space-y-6">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-full bg-yellow-400 flex items-center justify-center font-semibold text-sm text-gray-900">
                   {user?.name?.[0]?.toUpperCase() ?? 'U'}
@@ -417,7 +416,7 @@ return res;
               </nav>
             </div>
 
-            <div className="px-6 space-y-2 text-sm text-gray-500">
+            <div className="px-4 md:px-6 space-y-2 text-sm text-gray-500 mt-4 md:mt-0">
               <button
                 onClick={() => setShowProfile(true)}
                 className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-gray-50"
@@ -434,9 +433,9 @@ return res;
           </aside>
 
           {/* Main dashboard */}
-          <main className="flex-1 flex flex-col px-8 py-6 space-y-5 bg-[#fdfdfd]">
+          <main className="flex-1 flex flex-col px-4 md:px-8 py-4 md:py-6 space-y-5 bg-[#fdfdfd]">
             {/* Header */}
-            <header className="flex items-center justify_between">
+            <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="flex flex-col">
                 <span className="text-lg font-semibold text-gray-900">
                   Tasks
@@ -452,13 +451,13 @@ return res;
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search by title or description"
-                  className="w-80 h-10 rounded-full bg-gray-50 border border-gray-200 px-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                  className="w-full md:w-80 h-10 rounded-full bg-gray-50 border border-gray-200 px-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-300"
                 />
               </div>
             </header>
 
             {/* Filters and create task row */}
-            <section className={`${shellCardClass} px-5 py-4 space-y-4`}>
+            <section className={`${shellCardClass} px-4 md:px-5 py-4 space-y-4`}>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="mr-2 font-semibold text-gray-700">
                   View:
@@ -668,9 +667,9 @@ return res;
             </section>
 
             {/* Main content */}
-            <section className="flex-1 grid grid-cols-3 gap-4">
+            <section className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Tasks list */}
-              <div className={`${widgetCardClass} col-span-2`}>
+              <div className={`${widgetCardClass} md:col-span-2`}>
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="font-semibold text-sm text-gray-900">
                     My tasks ({visibleTasks.length})
@@ -813,7 +812,7 @@ return res;
                                   task.assignedToId ?? undefined,
                               });
                             }}
-                            className="rounded-full bg_white px-3 py-1 text-[11px] font-medium text-gray-700 border border-gray-200 hover:bg-gray-100"
+                            className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-gray-700 border border-gray-200 hover:bg-gray-100"
                           >
                             Edit
                           </button>
